@@ -26,6 +26,7 @@ public class TimeSync {
                   int maxFrameAdvantage = kDefaultMaxFrameAdvantage) {
     _local = new int[frameWindowSize];
     _remote = new int[frameWindowSize];
+    _last_inputs = new GameInput[frameWindowSize];
     _next_prediction = frameWindowSize * 3;
 
     _minFrameAdvantage = minFrameAdvantage;
@@ -68,7 +69,7 @@ public class TimeSync {
     // sleep for.
     int sleep_frames = (int)(((radvantage - advantage) / 2) + 0.5);
 
-    Debug.LogFormat("iteration {}:  sleep frames is {}", count, sleep_frames);
+    Debug.LogFormat("iteration {0}:  sleep frames is {1}", count, sleep_frames);
 
     // Some things just aren't worth correcting for.  Make sure
     // the difference is relevant before proceeding.
@@ -83,7 +84,7 @@ public class TimeSync {
     if (require_idle_input) {
       for (i = 1; i < _last_inputs.Length; i++) {
          if (!_last_inputs[i].Equals(_last_inputs[0], true)) {
-            Debug.LogFormat("iteration {}:  rejecting due to input stuff at position {}...!!!", 
+            Debug.LogFormat("iteration {0}:  rejecting due to input stuff at position {1}...!!!", 
               count, i);
             return 0;
          }

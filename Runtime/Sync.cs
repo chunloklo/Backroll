@@ -95,7 +95,7 @@ public unsafe class Sync : IDisposable {
       SaveCurrentFrame();
    }
 
-   Debug.LogFormat("Sending undelayed local frame {} to queue {}.", FrameCount, queue);
+   Debug.LogFormat("Sending undelayed local frame {0} to queue {1}.", FrameCount, queue);
    input.Frame = FrameCount;
    _inputQueues[queue].AddInput(ref input);
 
@@ -199,7 +199,7 @@ public unsafe class Sync : IDisposable {
      _savedstate.Head = FindSavedFrameIndex(frame);
      ref SavedFrame state = ref _savedstate.Frames[_savedstate.Head];
 
-     Debug.LogFormat("=== Loading frame info {} (size: {}  checksum: %08x).",
+     Debug.LogFormat("=== Loading frame info {0} (size: {1}  checksum: %08x).",
          state.Frame, state.Size, state.Checksum);
 
      Assert.IsTrue(state.Buffer != null && state.Size != 0);
@@ -222,7 +222,7 @@ public unsafe class Sync : IDisposable {
      _callbacks.SaveGameState(ref state);
      state.Frame = FrameCount;
 
-     Debug.LogFormat("=== Saved frame info {} (size: {}  checksum: %08x).",
+     Debug.LogFormat("=== Saved frame info {0} (size: {1}  checksum: %08x).",
          state.Frame, state.Size, state.Checksum);
 
      _savedstate.Head = (_savedstate.Head + 1) % _savedstate.Frames.Length;
@@ -259,7 +259,7 @@ public unsafe class Sync : IDisposable {
      int first_incorrect = GameInput.kNullFrame;
      for (int i = 0; i < _config.NumPlayers; i++) {
         int incorrect = _inputQueues[i].GetFirstIncorrectFrame();
-        Debug.LogFormat("considering incorrect frame {} reported by queue {}.", incorrect, i);
+        Debug.LogFormat("considering incorrect frame {0} reported by queue {1}.", incorrect, i);
 
         if (incorrect != GameInput.kNullFrame &&
             (first_incorrect == GameInput.kNullFrame ||

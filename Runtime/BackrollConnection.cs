@@ -17,8 +17,25 @@ public struct BackrollConnectStatus : ISerializable {
       set => data = (uint)((data & ~1u) | (value ? 1u : 0u));
    }
    public int LastFrame {
-      get => (int)(data << 1);
-      set => data = (uint)((data & 1) | (uint)(value << 1));
+            get {
+                if ((data | 1) == ~(uint)0)
+                {
+                    return -1;
+                }
+                else {
+                    return (int) (data >> 1);
+                }
+            }
+            set {
+                if (value == -1)
+                {
+                    data = (data & 1) | unchecked ((uint)(~0 << 1));
+                }
+                else
+                {
+                    data = (data & 1) | (uint)(value << 1);
+                };
+            }
    }
 
   public void Serialize<T>(ref T serializer) where T : struct, ISerializer 
@@ -52,6 +69,8 @@ public unsafe class BackrollConnection : IDisposable {
     QualityReport     = 3,
     QualityReply      = 4,
     KeepAlive         = 5,
+    SyncRequest       = 6,
+    SyncReply         = 7,
   }
 
   [StructLayout(LayoutKind.Explicit, Size=12)]
@@ -140,9 +159,17 @@ public unsafe class BackrollConnection : IDisposable {
     _messageHandlers.RegisterHandler<QualityReportMessage>((byte)MessageCodes.QualityReport, OnQualityReport);
     _messageHandlers.RegisterHandler<QualityReplyMessage>((byte)MessageCodes.QualityReply, OnQualityReply);
     _messageHandlers.RegisterHandler<KeepAliveMessage>((byte)MessageCodes.KeepAlive, OnKeepAlive);
+    _messageHandlers.RegisterHandler<SyncRequestMessage>((byte)MessageCodes.SyncRequest, OnSyncRequest);
+    _messageHandlers.RegisterHandler<SyncReplyMessage>((byte)MessageCodes.SyncReply, OnSyncReply);
     _messageHandlers.Listen(LobbyMember);
 
     LobbyMember.OnNetworkMessage += OnNetworkMessage;
+
+    // Initializing ack frame to -1
+    _last_acked_input.Frame = -1;
+
+    // Initializing LastRecievedFrame to -1 too
+    _lastRecievedInput.Frame = -1;
   }
 
   public void Dispose() => _messageHandlers.Dispose();
@@ -151,7 +178,10 @@ public unsafe class BackrollConnection : IDisposable {
      if (LobbyMember != null) {
         _current_state = State.Syncing;
         _state.Sync.RoundTripsRemaining = NUM_SYNC_PACKETS;
-        SendSyncRequest();
+
+        // Steam is always synchronized already!
+        _current_state = State.Running;
+        //SendSyncRequest();
      }
   }
 
@@ -192,7 +222,7 @@ public unsafe class BackrollConnection : IDisposable {
 
    unsafe void Send<T>(in T msg, Reliability reliability = Reliability.Unreliable)
                       where T : struct, ISerializable {
-     Span<byte> buffer = stackalloc byte[SerializationConstants.kMaxMessageSize];
+     Span<byte> buffer = stackalloc byte[HouraiTeahouse.Serialization.SerializationConstants.kMaxMessageSize];
      var serializer = FixedSizeSerializer.Create(buffer);
      _messageHandlers.Serialize<T, FixedSizeSerializer>(msg, ref serializer);
 
@@ -258,23 +288,33 @@ public unsafe class BackrollConnection : IDisposable {
         msg.StartFrame = _pending_output.Peek().Frame;
         msg.InputSize = _pending_output.Peek().Size;
 
+        Debug.Log($"[BackrollConnection] Last: {last.Frame}, StartFrame: {msg.StartFrame}");
         Assert.IsTrue(last.Frame == -1 || last.Frame + 1 == msg.StartFrame);
         for (var j = 0; j < _pending_output.Size; j++) {
            ref GameInput current = ref _pending_output[j];
+           Debug.Log($"[BackrollConnection] Encoding frame {current.Frame}");
            fixed (byte* currentPtr = current.bits) {
-               if (UnsafeUtility.MemCmp(currentPtr, last.bits, current.Size) == 0) continue;
+               if (UnsafeUtility.MemCmp(currentPtr, last.bits, current.Size) != 0)
+               {
+                    for (var i = 0; i < current.Size * 8; i++)
+                    {
+                        Assert.IsTrue(i < (1 << BitVector.kNibbleSize));
+                        if (current[i] == last[i]) continue;
+                        BitVector.SetBit(msg.bits, ref offset);
+                        if (current[i])
+                        {
+                            BitVector.SetBit(msg.bits, ref offset);
+                        }
+                        else
+                        {
+                            BitVector.ClearBit(msg.bits, ref offset);
+                        }
+                        BitVector.WriteNibblet(msg.bits, i, ref offset);
+                        Debug.Log($"[BackrollConnection][Nibblet][Set] Nibblet Set! Frame {j + msg.StartFrame}, Bit: {i}, On: {current[i]}");
+                    }
+               }
            }
-           for (var i = 0; i < current.Size * 8; i++) {
-              Assert.IsTrue(i < (1 << BitVector.kNibbleSize));
-              if (current[i] == last[i]) continue;
-              BitVector.SetBit(msg.bits, ref offset);
-              if (current[i]) {
-                 BitVector.SetBit(msg.bits, ref offset);
-              } else {
-                 BitVector.ClearBit(msg.bits, ref offset);
-              }
-              BitVector.WriteNibblet(msg.bits, i, ref offset);
-           }
+
            BitVector.ClearBit(msg.bits, ref offset);
            last = _lastSentInput = current;
          }
@@ -292,6 +332,7 @@ public unsafe class BackrollConnection : IDisposable {
          UnsafeUtility.MemClear(msg.connect_status, size);
       }
 
+      Debug.LogFormat($"[BackrollConnection][Ack] SendAckFrame {msg.AckFrame}");
      Assert.IsTrue(offset < InputMessage.kMaxCompressedBits);
      Send(msg);
    }
@@ -304,7 +345,7 @@ public unsafe class BackrollConnection : IDisposable {
    case State.Syncing:
       int next_interval = (_state.Sync.RoundTripsRemaining == NUM_SYNC_PACKETS) ? SYNC_FIRST_RETRY_INTERVAL : SYNC_RETRY_INTERVAL;
       if (_lastSendTime != 0 && _lastSendTime + next_interval < now) {
-         Debug.LogFormat("No luck syncing after {} ms... Resending sync packet.",
+         Debug.LogFormat("No luck syncing after {0} ms... Resending sync packet.",
             next_interval);
          SendSyncRequest();
       }
@@ -314,7 +355,7 @@ public unsafe class BackrollConnection : IDisposable {
       // xxx: rig all this up with a timer wrapper
       if (_state.Running.LastInputPacketRecieveTime == 0||
           _state.Running.LastInputPacketRecieveTime + RUNNING_RETRY_INTERVAL < now) {
-         Debug.LogFormat("Haven't exchanged packets in a while (last received:{}  last sent:{}).  Resending.",
+         Debug.LogFormat("Haven't exchanged packets in a while (last received:{0}  last sent:{1}).  Resending.",
             _lastRecievedInput.Frame, _lastSentInput.Frame);
          SendPendingOutput();
          _state.Running.LastInputPacketRecieveTime = now;
@@ -343,7 +384,7 @@ public unsafe class BackrollConnection : IDisposable {
 
       if (_disconnectTimeout != 0 && _disconnectNotifyStart != 0 &&
          !_disconnect_notify_sent && (_lastReceiveTime + _disconnectNotifyStart < now)) {
-         Debug.LogFormat("Endpoint has stopped receiving packets for {} ms.  Sending notification.",
+         Debug.LogFormat("Endpoint has stopped receiving packets for {0} ms.  Sending notification.",
             _disconnectNotifyStart);
          uint disconnectTimeout = _disconnectTimeout - _disconnectNotifyStart;
          OnNetworkInterrupted?.Invoke(disconnectTimeout);
@@ -352,7 +393,7 @@ public unsafe class BackrollConnection : IDisposable {
 
       if (_disconnectTimeout != 0 && (_lastReceiveTime + _disconnectTimeout < now)) {
          if (!_disconnect_event_sent) {
-            Debug.LogFormat("Endpoint has stopped receiving packets for {} ms.  Disconnecting.",
+            Debug.LogFormat("Endpoint has stopped receiving packets for {0} ms.  Disconnecting.",
                _disconnectTimeout);
             OnDisconnected?.Invoke();
             _disconnect_event_sent = true;
@@ -383,7 +424,7 @@ public unsafe class BackrollConnection : IDisposable {
      }
 
      if (msg.RandomReply != _state.Sync.Random) {
-        Debug.LogFormat("sync reply {} != {}.  Keep looking...",
+        Debug.LogFormat("sync reply {0} != {1}.  Keep looking...",
             msg.RandomReply, _state.Sync.Random);
         return;
      }
@@ -393,7 +434,7 @@ public unsafe class BackrollConnection : IDisposable {
         _connected = true;
      }
 
-     Debug.LogFormat("Checking sync state ({} round trips remaining).",
+     Debug.LogFormat("Checking sync state ({0} round trips remaining).",
          _state.Sync.RoundTripsRemaining);
      if (--_state.Sync.RoundTripsRemaining == 0) {
         Debug.Log("Synchronized!");
@@ -409,6 +450,7 @@ public unsafe class BackrollConnection : IDisposable {
   }
 
   void OnInputMessage(ref InputMessage msg) {
+    Debug.Log("[BackrollConnection] Recieved Input");
    // If a disconnect is requested, go ahead and disconnect now.
    bool disconnect_requested = msg.DisconnectRequested;
    if (disconnect_requested) {
@@ -448,6 +490,7 @@ public unsafe class BackrollConnection : IDisposable {
             Assert.IsTrue(currentFrame <= (_lastRecievedInput.Frame + 1));
             bool useInputs = currentFrame == _lastRecievedInput.Frame + 1;
 
+            Debug.Log($"[BackrollConnection][Nibblet][Read] Use? {useInputs} Frame {currentFrame}, lastRecievedInputFrame {_lastRecievedInput.Frame}");
             while (BitVector.ReadBit(ptr, ref offset)) {
                bool bit = BitVector.ReadBit(ptr, ref offset);
                int button = BitVector.ReadNibblet(ptr, ref offset);
@@ -458,6 +501,7 @@ public unsafe class BackrollConnection : IDisposable {
                      _lastRecievedInput.Clear(button);
                   }
                }
+               Debug.Log($"[BackrollConnection][Nibblet][Read] Nibblet Read! Frame {currentFrame}, Bit: {button}, On: {bit}, Offset{offset}");
             }
             Assert.IsTrue(offset <= numBits);
 
@@ -473,10 +517,10 @@ public unsafe class BackrollConnection : IDisposable {
 
                _state.Running.LastInputPacketRecieveTime = BackrollTime.GetTime();
 
-               Debug.LogFormat("Sending frame {} to emu queue {} ({}).",
+               Debug.LogFormat("[BackrollConnection][Nibblet][Read] Sending frame {0} to emu queue {1} ({2}).",
                   _lastRecievedInput.Frame, _queue, _lastRecievedInput);
             } else {
-               Debug.LogFormat("Skipping past frame:({}) current is {}.",
+               Debug.LogFormat("[BackrollConnection][Nibblet][Read] Skipping past frame:({0}) current is {1}.",
                   currentFrame, _lastRecievedInput.Frame);
             }
 
@@ -486,6 +530,7 @@ public unsafe class BackrollConnection : IDisposable {
       }
    }
    Assert.IsTrue(_lastRecievedInput.Frame >= last_received_frame_number);
+   Debug.LogFormat($"[BackrollConnection][Ack] GotAckFrame {msg.AckFrame}");
 
    // Get rid of our buffered input
    FlushOutputs(msg.AckFrame);
@@ -498,7 +543,7 @@ public unsafe class BackrollConnection : IDisposable {
 
   void FlushOutputs(int ackFrame) {
      while (!_pending_output.IsEmpty && _pending_output.Peek().Frame < ackFrame) {
-        Debug.LogFormat("Throwing away pending output frame {}",
+        Debug.LogFormat("Throwing away pending output frame {0}",
             _pending_output.Peek().Frame);
         _last_acked_input = _pending_output.Peek();
         _pending_output.Pop();

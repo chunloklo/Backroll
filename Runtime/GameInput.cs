@@ -99,10 +99,10 @@ public unsafe struct GameInput {
 
   public bool Equals(in GameInput other, bool bitsonly) {
     if (!bitsonly && Frame != other.Frame) {
-      Debug.LogFormat("frames don't match: {}, {}", Frame, other.Frame);
+      Debug.LogFormat("frames don't match: {0}, {1}", Frame, other.Frame);
     }
     if (Size != other.Size) {
-      Debug.LogFormat("sizes don't match: {}, {}", Size, other.Size);
+      Debug.LogFormat("sizes don't match: {0}, {1}", Size, other.Size);
     }
     fixed (byte* ptr = bits, otherPtr = other.bits) {
       if (UnsafeUtility.MemCmp(ptr, otherPtr, Size) != 0) {
