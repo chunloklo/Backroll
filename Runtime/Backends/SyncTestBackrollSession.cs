@@ -35,9 +35,11 @@ public unsafe class SyncTestsBackrollSession<T> : BackrollSession<T> where T : s
         _rollingback = false;
         _running = false;
         _current_input.Clear();
+        _saved_frames = new RingBuffer<SavedInfo>(64);
 
         _sync = new Sync(null, new Sync.Config {
-            NumPredictionFrames = BackrollConstants.kMaxPredictionFrames
+            Callbacks = _callbacks,
+            NumPredictionFrames = BackrollConstants.kMaxPredictionFrames,
         });
     }
 
@@ -47,7 +49,11 @@ public unsafe class SyncTestsBackrollSession<T> : BackrollSession<T> where T : s
         _running = true;
     }
 
-    public override void AddLocalInput(BackrollPlayerHandle player, ref T input) {}
+    public override void AddLocalInput(BackrollPlayerHandle player, ref T input) {
+        GameInput gameInput;
+        gameInput = GameInput.Create<T>(GameInput.kNullFrame, ref input);
+        _current_input = gameInput;
+    }
 
     public override int SyncInput(void *values, int size) {
         if (_rollingback) {
@@ -110,7 +116,8 @@ public unsafe class SyncTestsBackrollSession<T> : BackrollSession<T> where T : s
                     _callbacks.OnLogState?.Invoke($"Original f{_sync.FrameCount}:", (IntPtr)info.Buffer, info.Size);
                     _callbacks.OnLogState?.Invoke($"Replay   f{_sync.FrameCount}:", (IntPtr)_sync.GetLastSavedFrame().Buffer, 
                                                   _sync.GetLastSavedFrame().Size);
-                    Debug.LogWarning($"SyncTest: Checksum for frame {frame} does not match saved ({Checksum} != {Checksum})");
+                    Debug.LogWarning($"SyncTest: Checksum for frame {frame} does not match saved ({info.Checksum} != {Checksum})");
+                        Debug.Break();
                 } else {
                     Debug.Log($"Checksum {Checksum} for frame {info.Frame} matches.");
                 }

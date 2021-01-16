@@ -199,7 +199,7 @@ public unsafe class Sync : IDisposable {
      _savedstate.Head = FindSavedFrameIndex(frame);
      ref SavedFrame state = ref _savedstate.Frames[_savedstate.Head];
 
-     Debug.LogFormat("=== Loading frame info {0} (size: {1}  checksum: %08x).",
+     Debug.LogFormat("=== Loading frame info {0} (size: {1}  checksum: {2}).",
          state.Frame, state.Size, state.Checksum);
 
      Assert.IsTrue(state.Buffer != null && state.Size != 0);
@@ -222,7 +222,7 @@ public unsafe class Sync : IDisposable {
      _callbacks.SaveGameState(ref state);
      state.Frame = FrameCount;
 
-     Debug.LogFormat("=== Saved frame info {0} (size: {1}  checksum: %08x).",
+     Debug.LogFormat("=== Saved frame info {0} (size: {1}  checksum: {2}).",
          state.Frame, state.Size, state.Checksum);
 
      _savedstate.Head = (_savedstate.Head + 1) % _savedstate.Frames.Length;
