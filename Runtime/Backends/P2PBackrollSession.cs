@@ -46,25 +46,6 @@ public unsafe class P2PBackrollSession<T> : BackrollSession<T> where T : struct 
   BackrollSessionCallbacks _callbacks;
   Sync                  _sync;
 
-  public bool IsSynchronizing {
-    get {
-        // Always synchronized
-        return false;
-        for (var i = 0; i < _players.Length; i++) {
-           if (!_players[i].IsLocal && !_players[i].IsSynchronized &&
-               !_localConnectStatus[i].Disconnected) {
-              return false;
-           }
-        }
-        for (var i = 0; i < _spectators.Length; i++) {
-           if (!_spectators[i].IsLocal && !_spectators[i].IsSynchronized) {
-              return false;
-           }
-        }
-        return true;
-    }
-  }
-
   int                   _next_recommended_sleep;
   int                   _next_spectator_frame;
 
@@ -130,7 +111,7 @@ public unsafe class P2PBackrollSession<T> : BackrollSession<T> where T : struct 
   }
 
   public override void Idle(int timeout) {
-     if (_sync.InRollback || IsSynchronizing) return;
+     if (_sync.InRollback) return;
      UpdateConnections();
      _sync.CheckSimulation(timeout);
 
@@ -265,9 +246,6 @@ public unsafe class P2PBackrollSession<T> : BackrollSession<T> where T : struct 
      if (_sync.InRollback) {
         throw new BackrollException(BackrollErrorCode.InRollback);
      }
-     if (IsSynchronizing) {
-        throw new BackrollException(BackrollErrorCode.NotSynchronized);
-     }
 
      queue = PlayerHandleToQueue(player);
      input = GameInput.Create<T>(GameInput.kNullFrame, ref playerInput);
@@ -297,9 +275,6 @@ public unsafe class P2PBackrollSession<T> : BackrollSession<T> where T : struct 
 
   public override int SyncInput(void *values, int size) {
      // Wait until we've started to return inputs.
-     if (IsSynchronizing) {
-        throw new BackrollException(BackrollErrorCode.NotSynchronized);
-     }
      return _sync.SynchronizeInputs(values, size);
   }
 
@@ -337,8 +312,6 @@ public unsafe class P2PBackrollSession<T> : BackrollSession<T> where T : struct 
        int current_remote_frame = _localConnectStatus[queue].LastFrame;
        int new_remote_frame = input.Frame;
 
-
-       Debug.Log($"[BackrollConnection][Nibblet][Read] Use Me! Remote Frame {new_remote_frame}, Last Frame {current_remote_frame}");
        Assert.IsTrue(current_remote_frame == -1 || new_remote_frame == (current_remote_frame + 1));
 
        _sync.AddRemoteInput(queue, ref input);
@@ -347,7 +320,6 @@ public unsafe class P2PBackrollSession<T> : BackrollSession<T> where T : struct 
          queue, new_remote_frame); 
        _localConnectStatus[queue].LastFrame = new_remote_frame;
 
-       Debug.Log($"[BackrollConnection][Nibblet][Read] Use Me! New Remote Frame {_localConnectStatus[queue].LastFrame}");
      };
 
      connection.OnSynchronizing += (total, count) => {

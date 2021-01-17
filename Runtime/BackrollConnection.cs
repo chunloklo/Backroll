@@ -17,25 +17,27 @@ public struct BackrollConnectStatus : ISerializable {
       set => data = (uint)((data & ~1u) | (value ? 1u : 0u));
    }
    public int LastFrame {
-            get {
-                if ((data | 1) == ~(uint)0)
-                {
-                    return -1;
-                }
-                else {
-                    return (int) (data >> 1);
-                }
+        // LastFrame is formatted as an uint (after throwing out the first bit) unless...
+        // if all bits are set, then it represents -1 (the initial frame number).
+        get {
+            if ((data | 1) == ~(uint)0)
+            {
+                return -1;
             }
-            set {
-                if (value == -1)
-                {
-                    data = (data & 1) | unchecked ((uint)(~0 << 1));
-                }
-                else
-                {
-                    data = (data & 1) | (uint)(value << 1);
-                };
+            else {
+                return (int) (data >> 1);
             }
+        }
+        set {
+            if (value == -1)
+            {
+                data = (data & 1) | unchecked ((uint)(~0 << 1));
+            }
+            else
+            {
+                data = (data & 1) | (uint)(value << 1);
+            };
+        }
    }
 
   public void Serialize<T>(ref T serializer) where T : struct, ISerializer 
@@ -170,6 +172,9 @@ public unsafe class BackrollConnection : IDisposable {
 
     // Initializing LastRecievedFrame to -1 too
     _lastRecievedInput.Frame = -1;
+
+    // Setting max encoding size to 1200 for UDP
+    SerializationConstants.kMaxMessageSize = 1200;
   }
 
   public void Dispose() => _messageHandlers.Dispose();
@@ -288,11 +293,10 @@ public unsafe class BackrollConnection : IDisposable {
         msg.StartFrame = _pending_output.Peek().Frame;
         msg.InputSize = _pending_output.Peek().Size;
 
-        Debug.Log($"[BackrollConnection] Last: {last.Frame}, StartFrame: {msg.StartFrame}");
         Assert.IsTrue(last.Frame == -1 || last.Frame + 1 == msg.StartFrame);
-        for (var j = 0; j < _pending_output.Size; j++) {
+        for (var j = 0; j < _pending_output.Size; j++) 
+        {
            ref GameInput current = ref _pending_output[j];
-           Debug.Log($"[BackrollConnection] Encoding frame {current.Frame}");
            fixed (byte* currentPtr = current.bits) {
                if (UnsafeUtility.MemCmp(currentPtr, last.bits, current.Size) != 0)
                {
@@ -310,11 +314,9 @@ public unsafe class BackrollConnection : IDisposable {
                             BitVector.ClearBit(msg.bits, ref offset);
                         }
                         BitVector.WriteNibblet(msg.bits, i, ref offset);
-                        Debug.Log($"[BackrollConnection][Nibblet][Set] Nibblet Set! Frame {j + msg.StartFrame}, Bit: {i}, On: {current[i]}");
                     }
                }
            }
-
            BitVector.ClearBit(msg.bits, ref offset);
            last = _lastSentInput = current;
          }
@@ -332,7 +334,6 @@ public unsafe class BackrollConnection : IDisposable {
          UnsafeUtility.MemClear(msg.connect_status, size);
       }
 
-      Debug.LogFormat($"[BackrollConnection][Ack] SendAckFrame {msg.AckFrame}");
      Assert.IsTrue(offset < InputMessage.kMaxCompressedBits);
      Send(msg);
    }
@@ -450,7 +451,6 @@ public unsafe class BackrollConnection : IDisposable {
   }
 
   void OnInputMessage(ref InputMessage msg) {
-    Debug.Log("[BackrollConnection] Recieved Input");
    // If a disconnect is requested, go ahead and disconnect now.
    bool disconnect_requested = msg.DisconnectRequested;
    if (disconnect_requested) {
@@ -490,7 +490,6 @@ public unsafe class BackrollConnection : IDisposable {
             Assert.IsTrue(currentFrame <= (_lastRecievedInput.Frame + 1));
             bool useInputs = currentFrame == _lastRecievedInput.Frame + 1;
 
-            Debug.Log($"[BackrollConnection][Nibblet][Read] Use? {useInputs} Frame {currentFrame}, lastRecievedInputFrame {_lastRecievedInput.Frame}");
             while (BitVector.ReadBit(ptr, ref offset)) {
                bool bit = BitVector.ReadBit(ptr, ref offset);
                int button = BitVector.ReadNibblet(ptr, ref offset);
@@ -501,7 +500,6 @@ public unsafe class BackrollConnection : IDisposable {
                      _lastRecievedInput.Clear(button);
                   }
                }
-               Debug.Log($"[BackrollConnection][Nibblet][Read] Nibblet Read! Frame {currentFrame}, Bit: {button}, On: {bit}, Offset{offset}");
             }
             Assert.IsTrue(offset <= numBits);
 
@@ -516,11 +514,8 @@ public unsafe class BackrollConnection : IDisposable {
                OnInput?.Invoke(_lastRecievedInput);
 
                _state.Running.LastInputPacketRecieveTime = BackrollTime.GetTime();
-
-               Debug.LogFormat("[BackrollConnection][Nibblet][Read] Sending frame {0} to emu queue {1} ({2}).",
-                  _lastRecievedInput.Frame, _queue, _lastRecievedInput);
+               _lastRecievedInput.Frame, _queue, _lastRecievedInput);
             } else {
-               Debug.LogFormat("[BackrollConnection][Nibblet][Read] Skipping past frame:({0}) current is {1}.",
                   currentFrame, _lastRecievedInput.Frame);
             }
 
@@ -530,7 +525,6 @@ public unsafe class BackrollConnection : IDisposable {
       }
    }
    Assert.IsTrue(_lastRecievedInput.Frame >= last_received_frame_number);
-   Debug.LogFormat($"[BackrollConnection][Ack] GotAckFrame {msg.AckFrame}");
 
    // Get rid of our buffered input
    FlushOutputs(msg.AckFrame);
